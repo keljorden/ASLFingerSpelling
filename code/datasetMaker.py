@@ -2,6 +2,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
+from torch.nn.utils.rnn import pad_sequence
 from PIL import Image
 import os
 
@@ -67,6 +68,18 @@ class ChicagoFSWildDataset(Dataset):
         
         return frames_tensor, target_tensor
 
+def pad_collate(batch):
+    frames_list, targets_list = zip(*batch)
+    
+    frames_padded = pad_sequence(frames_list, batch_first=True)
+    
+    targets_padded = pad_sequence(targets_list, batch_first=True, padding_value=0)
+    
+    frame_lengths = torch.tensor([len(f) for f in frames_list], dtype=torch.long)
+    target_lengths = torch.tensor([len(t) for t in targets_list], dtype=torch.long)
+    
+    return frames_padded, targets_padded, frame_lengths, target_lengths
+
 if __name__ == "__main__":
 
     root = r"C:\Users\offsh\Documents\project\ChicagoFSWild\ChicagoFSWild\ChicagoFSWild-Cropped"
@@ -81,3 +94,19 @@ if __name__ == "__main__":
         frames, tag = dataset[0]
         print(f"Frames shape: {frames.shape}")
         print(f"Tag (encoded label): {tag}")
+
+    batch_size = 4
+    dataloader = DataLoader(
+        dataset, 
+        batch_size=batch_size, 
+        shuffle=True, 
+        collate_fn=pad_collate
+    )
+        
+    print("\nTesting DataLoader...")
+    for batch_idx, (frames_batch, targets_batch, f_lens, t_lens) in enumerate(dataloader):
+        print(f"Batch Frames Shape: {frames_batch.shape}")
+        print(f"Batch Targets Shape: {targets_batch.shape}")
+        print(f"Frame Lengths: {f_lens}")
+        print(f"Target Lengths: {t_lens}")
+        break
