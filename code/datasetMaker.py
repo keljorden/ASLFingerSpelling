@@ -47,7 +47,7 @@ class ChicagoFSWildDataset(Dataset):
         sequence_path = os.path.join(self.root_dir, folder_name)
         
         if os.path.exists(sequence_path):
-            frame_files = sorted(os.listdir(sequence_path))
+            frame_files = sorted([f for f in os.listdir(sequence_path) if f.endswith(('.jpg', '.png'))])
             for f in frame_files:
                 img_path = os.path.join(sequence_path, f)
                 try:
@@ -59,7 +59,7 @@ class ChicagoFSWildDataset(Dataset):
                     continue
                     
         if len(frames) == 0:
-            frames = [torch.zeros(3, 224, 224) for _ in range(num_frames)]
+            return self.__getitem__((idx + 1) % len(self))
             
         frames_tensor = torch.stack(frames) 
         
