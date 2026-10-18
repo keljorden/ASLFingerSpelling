@@ -2,6 +2,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
+import torchvision.transforms.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from PIL import Image
 import os
@@ -17,6 +18,18 @@ class ASLVulcanTokenizer:
         text = str(text).lower().replace(" ", "") 
         return [self.char_to_idx[c] for c in text if c in self.char_to_idx]
 
+class PadToSquare:
+    def __call__(self, img):
+        w, h = img.size
+        max_wh = max(w, h)
+        
+        p_left = (max_wh - w) // 2
+        p_top = (max_wh - h) // 2
+        p_right = max_wh - w - p_left
+        p_bottom = max_wh - h - p_top
+        
+        return F.pad(img, (p_left, p_top, p_right, p_bottom), fill=0)
+
 class ChicagoFSWildDataset(Dataset):
     def __init__(self, csv_file: str, root_dir: str, tokenizer, partition='train', transform=None):
         
@@ -27,6 +40,7 @@ class ChicagoFSWildDataset(Dataset):
         
         if transform is None:
             self.transform = transforms.Compose([
+                PadToSquare(),
                 transforms.Resize((224, 224)),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
