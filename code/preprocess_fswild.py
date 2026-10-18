@@ -4,6 +4,7 @@ import pandas as pd
 import mediapipe as mp
 from PIL import Image
 from tqdm import tqdm
+import shutil
 
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
@@ -20,67 +21,69 @@ class MediaPipeHandCropper:
         options = vision.HandLandmarkerOptions(
             base_options=base_options,
             running_mode=vision.RunningMode.IMAGE,
-            num_hands=2,
+            num_hands=2, 
             min_hand_detection_confidence=0.5
         )
 
-        self.hands_detector = vision.HandLandmarker.create_from_options(
-            options
-        )
+        self.hands_detector = vision.HandLandmarker.create_from_options(options)
 
-    def crop(self, image_path):
+    def get_hand_coordinates(self, image_path):
+       
         image = cv2.imread(image_path)
-
         if image is None:
-            return None
+            return [], [], None, None
 
+        h, w, _ = image.shape
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
+        
         mp_image = mp.Image(
             image_format=mp.ImageFormat.SRGB,
             data=image_rgb
         )
 
         results = self.hands_detector.detect(mp_image)
+        
+        frame_x_coords = []
+        frame_y_coords = []
 
         if results.hand_landmarks:
-            h, w, _ = image.shape
-            
-            all_x_coords = []
-            all_y_coords = []
-
             for hand_landmarks in results.hand_landmarks:
-                all_x_coords.extend([landmark.x * w for landmark in hand_landmarks])
-                all_y_coords.extend([landmark.y * h for landmark in hand_landmarks])
+                frame_x_coords.extend([landmark.x * w for landmark in hand_landmarks])
+                frame_y_coords.extend([landmark.y * h for landmark in hand_landmarks])
+                
+        return frame_x_coords, frame_y_coords, w, h
 
-            xmin = max(0, int(min(all_x_coords)) - self.padding)
-            ymin = max(0, int(min(all_y_coords)) - self.padding)
-            xmax = min(w, int(max(all_x_coords)) + self.padding)
-            ymax = min(h, int(max(all_y_coords)) + self.padding)
+    def apply_crop_and_save(self, image_path, target_path, bbox):
+        
+        image = cv2.imread(image_path)
+        if image is None:
+            return
 
-            if xmax > xmin and ymax > ymin:
-                cropped_array = image_rgb[ymin:ymax, xmin:xmax]
-                return Image.fromarray(cropped_array)
-
-        return Image.fromarray(image_rgb)
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        xmin, ymin, xmax, ymax = bbox
+        
+        cropped_array = image_rgb[ymin:ymax, xmin:xmax]
+        
+        img_pil = Image.fromarray(cropped_array)
+        img_pil.save(target_path)
 
     def close(self):
         self.hands_detector.close()
 
 
-def process_dataset(csv_path, source_dir, target_dir):
+def process_dataset(csv_path, source_dir, target_dir, padding=20):
     df = pd.read_csv(csv_path)
     os.makedirs(target_dir, exist_ok=True)
 
     sequences = df["filename"].dropna().unique()
-    print(f"Processing {len(sequences)} sequences...")
+    print(f"Processing {len(sequences)} sequences using Global Sequence Cropping...")
 
     cropper = MediaPipeHandCropper(
         model_path=os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "hand_landmarker.task"
         ),
-        padding=20
+        padding=padding
     )
 
     try:
@@ -97,22 +100,51 @@ def process_dataset(csv_path, source_dir, target_dir):
                 f for f in os.listdir(seq_source_path)
                 if f.lower().endswith(".jpg")
             )
+            
+            if not frame_files:
+                continue
+
+            first_target_img = os.path.join(seq_target_path, frame_files[0])
+            if os.path.exists(first_target_img):
+                continue
+
+            seq_all_x = []
+            seq_all_y = []
+            img_w, img_h = 0, 0
 
             for filename in frame_files:
-                source_img_path = os.path.join(
-                    seq_source_path, filename
-                )
-                target_img_path = os.path.join(
-                    seq_target_path, filename
-                )
+                source_img_path = os.path.join(seq_source_path, filename)
+                x_coords, y_coords, w, h = cropper.get_hand_coordinates(source_img_path)
+                
+                seq_all_x.extend(x_coords)
+                seq_all_y.extend(y_coords)
+                
+                if w is not None and img_w == 0:
+                    img_w, img_h = w, h
 
-                if os.path.exists(target_img_path):
-                    continue
+            if not seq_all_x or not seq_all_y:
+                for filename in frame_files:
+                    shutil.copy2(
+                        os.path.join(seq_source_path, filename),
+                        os.path.join(seq_target_path, filename)
+                    )
+                continue
 
-                img_pil = cropper.crop(source_img_path)
+            xmin = max(0, int(min(seq_all_x)) - padding)
+            ymin = max(0, int(min(seq_all_y)) - padding)
+            xmax = min(img_w, int(max(seq_all_x)) + padding)
+            ymax = min(img_h, int(max(seq_all_y)) + padding)
+            
+            if xmax <= xmin or ymax <= ymin:
+                continue
+                
+            global_bbox = (xmin, ymin, xmax, ymax)
 
-                if img_pil is not None:
-                    img_pil.save(target_img_path)
+            for filename in frame_files:
+                source_img_path = os.path.join(seq_source_path, filename)
+                target_img_path = os.path.join(seq_target_path, filename)
+                
+                cropper.apply_crop_and_save(source_img_path, target_img_path, global_bbox)
 
     finally:
         cropper.close()
@@ -135,5 +167,5 @@ if __name__ == "__main__":
     if not os.path.isdir(SOURCE_DIR):
         raise FileNotFoundError(f"Frames directory not found: {SOURCE_DIR}")
 
-    process_dataset(CSV_FILE, SOURCE_DIR, TARGET_DIR)
-    print("Cropping complete!")
+    process_dataset(CSV_FILE, SOURCE_DIR, TARGET_DIR, padding=30)
+    print("Cropping complete")
