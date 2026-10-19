@@ -6,6 +6,7 @@ import torchvision.transforms.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from PIL import Image
 import os
+import random
 
 class ASLVulcanTokenizer:
     def __init__(self):
@@ -30,23 +31,68 @@ class PadToSquare:
         
         return F.pad(img, (p_left, p_top, p_right, p_bottom), fill=0)
 
+class TemporalFrameDrop:
+    def __init__(self, drop_prob=0.15):
+        self.drop_prob = drop_prob
+        
+    def __call__(self, pil_frames):
+        if len(pil_frames) <= 5:
+            return pil_frames
+            
+        kept_frames = []
+        for img in pil_frames:
+            if random.random() > self.drop_prob:
+                kept_frames.append(img)
+                
+        if len(kept_frames) == 0:
+            return pil_frames
+            
+        return kept_frames
+
+class SpatialVideoAugmentation:
+    def __init__(self, p=0.5):
+        self.p = p
+
+    def __call__(self, pil_frames):
+        if random.random() > self.p:
+            return pil_frames
+
+        angle = random.uniform(-15, 15)
+        brightness = random.uniform(0.7, 1.3)
+        contrast = random.uniform(0.7, 1.3)
+        
+        augmented_frames = []
+        for img in pil_frames:
+            img = F.rotate(img, angle)
+            img = F.adjust_brightness(img, brightness)
+            img = F.adjust_contrast(img, contrast)
+            augmented_frames.append(img)
+            
+        return augmented_frames
+
 class ChicagoFSWildDataset(Dataset):
-    def __init__(self, csv_file: str, root_dir: str, tokenizer, partition='train', transform=None):
+    def __init__(self, csv_file: str, root_dir: str, tokenizer, partition='train'):
         
         self.df = pd.read_csv(csv_file)
         self.df = self.df[self.df['partition'] == partition].reset_index(drop=True)
         self.root_dir = root_dir
         self.tokenizer = tokenizer
-        
-        if transform is None:
-            self.transform = transforms.Compose([
-                PadToSquare(),
-                transforms.Resize((224, 224)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        self.partition = partition
+
+        if self.partition == 'train':
+            self.video_transforms = transforms.Compose([
+                TemporalFrameDrop(drop_prob=0.15),
+                SpatialVideoAugmentation(p=0.5)
             ])
         else:
-            self.transform = transform
+            self.video_transforms = lambda x: x
+        
+        self.frame_transforms = transforms.Compose([
+            PadToSquare(),
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
 
     def __len__(self):
         return len(self.df)
@@ -66,15 +112,17 @@ class ChicagoFSWildDataset(Dataset):
                 img_path = os.path.join(sequence_path, f)
                 try:
                     img = Image.open(img_path).convert('RGB')
-                    if self.transform:
-                        img = self.transform(img)
                     frames.append(img)
                 except Exception as e:
                     continue
                     
         if len(frames) == 0:
             return self.__getitem__((idx + 1) % len(self))
-            
+
+        frames = self.video_transforms(frames)
+        
+        frames = [self.frame_transforms(img) for img in frames]
+        
         frames_tensor = torch.stack(frames) 
         
         target = self.tokenizer.encode(text_label)
