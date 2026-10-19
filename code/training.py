@@ -6,7 +6,7 @@ from tqdm import tqdm
 from greedyDecoder import greedy_decode
 from CER import decode_targets, calculate_cer
 
-def train_and_validate(model, train_loader, val_loader, tokenizer, max_epochs=100, learning_rate=1e-3, device='cuda', save_path = "best_model.pth"):
+def train_and_validate(model, train_loader, val_loader, tokenizer, max_epochs=100, learning_rate=1e-3, accumulation_steps=4, device='cuda', save_path="best_model.pth"):
     model = model.to(device)
     
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
@@ -34,19 +34,26 @@ def train_and_validate(model, train_loader, val_loader, tokenizer, max_epochs=10
         train_loss = 0.0
         train_bar = tqdm(train_loader, desc=f"Epoch {epoch+1} [Train]")
         
-        for frames, targets, f_lens, t_lens in train_bar:
+        optimizer.zero_grad()
+        
+        for batch_idx, (frames, targets, f_lens, t_lens) in enumerate(train_bar):
             frames, targets = frames.to(device), targets.to(device)
             f_lens, t_lens = f_lens.to(device), t_lens.to(device)
             
-            optimizer.zero_grad()
             predictions = model(frames)
             
             log_probs = F.log_softmax(predictions, dim=2).permute(1, 0, 2)
             loss = criterion(log_probs, targets, f_lens, t_lens)
             
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+            scaled_loss = loss / accumulation_steps
+            scaled_loss.backward()
+            
+            if ((batch_idx + 1) % accumulation_steps == 0) or ((batch_idx + 1) == len(train_loader)):
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                
+                optimizer.step()
+                
+                optimizer.zero_grad()
             
             train_loss += loss.item()
             train_bar.set_postfix({'loss': f"{loss.item():.4f}"})
@@ -99,3 +106,7 @@ def train_and_validate(model, train_loader, val_loader, tokenizer, max_epochs=10
         else:
             epochs_without_improvement += 1
             print(f"  -> No improvement for {epochs_without_improvement} epoch(s).")
+            
+        if epochs_without_improvement >= early_stopping_patience:
+            print(f"\n[!] Validation CER plateaued for {early_stopping_patience} epochs. Stopping training early.")
+            break
