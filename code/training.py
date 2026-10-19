@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from tqdm import tqdm
 
-def train_and_validate(model, train_loader, val_loader, max_epochs=100, learning_rate=1e-3, device='cuda'):
+def train_and_validate(model, train_loader, val_loader, max_epochs=100, learning_rate=1e-3, device='cuda', save_path = "best_model.pth"):
     model = model.to(device)
     
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
@@ -77,7 +77,7 @@ def train_and_validate(model, train_loader, val_loader, max_epochs=100, learning
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             epochs_without_improvement = 0
-            torch.save(model.state_dict(), "best_cslr_model.pth")
+            torch.save(model.state_dict(), save_path)
             print("  -> Best model saved!")
         else:
             epochs_without_improvement += 1
