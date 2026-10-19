@@ -3,8 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from tqdm import tqdm
+from greedyDecoder import greedy_decode
+from CER import decode_targets, calculate_cer
 
-def train_and_validate(model, train_loader, val_loader, max_epochs=100, learning_rate=1e-3, device='cuda', save_path = "best_model.pth"):
+def train_and_validate(model, train_loader, val_loader, tokenizer, max_epochs=100, learning_rate=1e-3, device='cuda', save_path = "best_model.pth"):
     model = model.to(device)
     
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
@@ -22,7 +24,7 @@ def train_and_validate(model, train_loader, val_loader, max_epochs=100, learning
     
     early_stopping_patience = 10
     epochs_without_improvement = 0
-    best_val_loss = float('inf')
+    best_val_cer = float('inf')
     
     print(f"Starting training on {device}...")
     
@@ -53,6 +55,9 @@ def train_and_validate(model, train_loader, val_loader, max_epochs=100, learning
         
         model.eval()
         val_loss = 0.0
+        val_cer = 0.0
+        total_val_samples = 0
+        
         val_bar = tqdm(val_loader, desc=f"Epoch {epoch+1} [Val]")
         
         with torch.inference_mode():
@@ -63,26 +68,34 @@ def train_and_validate(model, train_loader, val_loader, max_epochs=100, learning
                 predictions = model(frames)
                 log_probs = F.log_softmax(predictions, dim=2).permute(1, 0, 2)
                 loss = criterion(log_probs, targets, f_lens, t_lens)
-                
                 val_loss += loss.item()
-                val_bar.set_postfix({'loss': f"{loss.item():.4f}"})
+                
+                pred_strings = greedy_decode(predictions, tokenizer)
+                target_strings = decode_targets(targets, t_lens, tokenizer)
+                
+                batch_cer = 0.0
+                for ref, hyp in zip(target_strings, pred_strings):
+                    cer = calculate_cer(ref, hyp)
+                    batch_cer += cer
+                        
+                val_cer += batch_cer
+                total_val_samples += len(targets)
+                
+                val_bar.set_postfix({'loss': f"{loss.item():.4f}", 'cer': f"{(batch_cer/len(targets)):.4f}"})
                 
         avg_val_loss = val_loss / len(val_loader)
+        avg_val_cer = val_cer / total_val_samples
         
         current_lr = optimizer.param_groups[0]['lr']
-        print(f"\nEpoch {epoch+1} Summary | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | LR: {current_lr:.6f}")
+        print(f"\nEpoch {epoch+1} Summary | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val CER: {avg_val_cer:.4f} | LR: {current_lr:.6f}")
         
-        scheduler.step(avg_val_loss)
+        scheduler.step(avg_val_cer)
         
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
+        if avg_val_cer < best_val_cer:
+            best_val_cer = avg_val_cer
             epochs_without_improvement = 0
             torch.save(model.state_dict(), save_path)
             print("  -> Best model saved!")
         else:
             epochs_without_improvement += 1
             print(f"  -> No improvement for {epochs_without_improvement} epoch(s).")
-            
-        if epochs_without_improvement >= early_stopping_patience:
-            print(f"\n[!] Validation loss plateaued for {early_stopping_patience} epochs. Stopping training early to prevent overfitting.")
-            break
