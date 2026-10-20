@@ -16,8 +16,7 @@ def train_and_validate(model, train_loader, val_loader, tokenizer, max_epochs=10
         mode='min', 
         factor=0.5,
         patience=3,
-        min_lr=1e-6,
-        verbose=True
+        min_lr=1e-6
     )
     
     criterion = nn.CTCLoss(blank=0, zero_infinity=True)
@@ -101,7 +100,14 @@ def train_and_validate(model, train_loader, val_loader, tokenizer, max_epochs=10
         if avg_val_cer < best_val_cer:
             best_val_cer = avg_val_cer
             epochs_without_improvement = 0
-            torch.save(model.state_dict(), save_path)
+            torch.save({
+                "epoch": epoch + 1,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "best_val_cer": best_val_cer,
+                "epochs_without_improvement": epochs_without_improvement,
+            }, save_path)
             print("  -> Best model saved!")
         else:
             epochs_without_improvement += 1
