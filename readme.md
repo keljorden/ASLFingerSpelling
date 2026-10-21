@@ -71,4 +71,4 @@ python inference.py --video "my_test_spelling.mp4" --weights "modelWeights/gru_s
 
 ## Evaluation Metric
 
-The model is evaluated using **CER (Character Error Rate)** based on the Levenshtein (edit) distance between the predicted text and the ground truth string, preventing division by zero and accurately reflecting the unaligned translation accuracy.
+The model is evaluated using **CER (Character Error Rate)** based on the Levenshtein distance between the predicted text and the ground truth string, preventing division by zero and accurately reflecting the unaligned translation accuracy.
